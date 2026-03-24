@@ -357,6 +357,22 @@ export class PiDiscordDaemon {
     return context;
   }
 
+  /** Check if a non-mention message is a continuation of an active conversation. */
+  isConversationFollowup(route, message) {
+    // Reply to a bot message (cache-only check, no API call)
+    if (message.reference?.messageId) {
+      const ref = message.channel.messages?.cache?.get(message.reference.messageId);
+      if (ref?.author?.id === this.client.user?.id) return true;
+    }
+
+    // Same user who last talked to the bot, and bot responded within 2 minutes
+    const entries = route.journal.entries;
+    const lastResponse = entries.findLast((e) => e.kind === "assistant-final" || e.kind === "trigger-sent");
+    if (!lastResponse || Date.now() - lastResponse.timestamp > 2 * 60 * 1000) return false;
+    const lastInbound = entries.findLast((e) => e.kind === "inbound");
+    return lastInbound?.authorId === message.author.id;
+  }
+
   async handleMessageCreate(message) {
     if (!this.client.user || message.author?.bot) return;
     const authorization = authorizeInteraction(message, this.config);
@@ -368,16 +384,19 @@ export class PiDiscordDaemon {
       const scope = this.resolveScopeFromChannel(message.guildId ?? null, message.channelId, message.channel);
       const route = await this.getExistingRoute(scope);
       if (!route) return;
-      await route.journal.append({
-        kind: "ambient",
-        sourceId: message.id,
-        routeKey: route.manifest.routeKey,
-        timestamp: Date.now(),
-        text: message.content ?? "",
-        authorId: message.author.id,
-        authorName: message.author.username,
-      });
-      return;
+      if (!this.isConversationFollowup(route, message)) {
+        await route.journal.append({
+          kind: "ambient",
+          sourceId: message.id,
+          routeKey: route.manifest.routeKey,
+          timestamp: Date.now(),
+          text: message.content ?? "",
+          authorId: message.author.id,
+          authorName: message.author.username,
+        });
+        return;
+      }
+      // Followup — fall through to normal processing
     }
 
     const scope = this.resolveScopeFromChannel(message.guildId ?? null, message.channelId, message.channel);
@@ -387,11 +406,12 @@ export class PiDiscordDaemon {
     const savedAttachments = await this.saveInboundAttachments(route, message.attachments.values(), message.id);
     const replyContext = message.reference?.messageId ? await this.fetchReplyContext(message) : undefined;
     const rawText = botMentioned ? stripBotMention(message.content ?? "", this.client.user.id) : (message.content ?? "");
+    const trigger = isDm ? "dm" : botMentioned ? "mention" : "followup";
     const promptText = buildPromptText({
       routeKey: route.manifest.routeKey,
       scope: route.manifest.scope,
       requester: { id: message.author.id, name: message.author.username },
-      trigger: isDm ? "dm" : "mention",
+      trigger,
       rawText,
       replyContext,
       savedAttachments,
@@ -419,7 +439,7 @@ export class PiDiscordDaemon {
         guildId: message.guildId ?? null,
         channelId: scope.channelId,
         threadId: scope.threadId,
-        trigger: isDm ? "dm" : "mention",
+        trigger,
       },
       payload: {
         rawText,

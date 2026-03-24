@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-03-24
+
+- **Conversation followups**: non-mention messages are now enqueued when they continue an active conversation. Two signals: reply to a bot message (cache check, no API call), or same user within 2 minutes of the bot's last response. Other messages remain ambient-only.
+
 ## [0.2.1] - 2026-03-23
 
 - Bump `@mariozechner/pi-coding-agent` dependency from `^0.57.1` to `^0.62.0`
